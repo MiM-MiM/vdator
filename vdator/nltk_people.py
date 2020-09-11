@@ -9,6 +9,8 @@ for t in ntlk_list:
 stop = stopwords.words('english')
 
 def ie_preprocess(document):
+  document = document.replace("and", ",")
+  document = document.replace("&", ",")
   document = ' '.join([i for i in document.split() if i not in stop])
   sentences = nltk.sent_tokenize(document)
   sentences = [nltk.word_tokenize(sent) for sent in sentences]
@@ -24,4 +26,3 @@ def extract_names(document):
         if chunk.label() == 'PERSON':
           names.append(' '.join([c[0] for c in chunk]))
   return names
-  

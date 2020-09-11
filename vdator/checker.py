@@ -244,7 +244,7 @@ class Checker():
     return reply
     
   def _construct_release_name(self, cut=None, hybird=False):
-    release_name = ""
+    release_name, reply = "", ""
 
     # scan type must come from bdinfo
     bdinfo_video_parts = self.bdinfo['video'][0].split(' / ')
@@ -317,7 +317,7 @@ class Checker():
         audio_channel_index = 2 if (len(main_audio_title) > 5 ) else 1
         main_audio_title[audio_channel_index] = main_audio_title[audio_channel_index].strip()
         # extract float
-        main_audio_title[audio_channel_index] = re.search("\d+(?:\.\d+)?", main_audio_title[audio_channel_index]).group(0)
+        main_audio_title[audio_channel_index] = re.search(r"\d+(?:\.\d+)?", main_audio_title[audio_channel_index]).group(0)
         # codec
         release_name += '.' + main_audio_title[codec_title_index]
         # channel
@@ -327,7 +327,7 @@ class Checker():
       if self.channel_name in INTERNAL_CHANNELS:
         release_name += RELEASE_GROUP + '.mkv'
 
-    return release_name
+    return release_name, reply
 
   def _partial_match(self, possible_names, name):
     for n in possible_names:
@@ -352,7 +352,11 @@ class Checker():
         complete_name = complete_name.split('/')[-1]
         
         # possible release names
-        possible_release_names = [self._construct_release_name(cut, hybird=('hybrid' in complete_name)) for cut in CUTS]
+        possible_release_names = list()
+        for cut in CUTS:
+          n_release_name_with_cut, n_reply = self._construct_release_name(cut, hybird=('hybrid' in complete_name))
+          possible_release_names.append(n_release_name_with_cut)
+          reply += n_reply
         
         if self.channel_name in INTERNAL_CHANNELS and self._exact_match(possible_release_names, complete_name):
           reply += self._print_report("correct", "Filename: `" + complete_name + "`\n")
@@ -514,64 +518,68 @@ class Checker():
   def check_audio_tracks(self):
     reply = ""
     
+    min_audio_count = min(len(self.bdinfo['audio']), len(self.mediainfo['audio']))
+    
     if self.source_detect.is_dvd():
       # audio track conversions not supported for dvds
       reply += self._print_report("info", "Audio track conversions check not supported for DVDs\n")
       return reply
-    elif len(self.bdinfo['audio']) == len(self.mediainfo['audio']):
-      for i, title in enumerate(self.bdinfo['audio']):
-        bdinfo_audio_parts = re.sub(r'\s+', ' ', title).split(' / ')
-        
-        # determine where to split based on bdinfo type
-        audio_split_index = 1 if self.bdinfo['type'] == BDInfoType.QUICK_SUMMARY else 0
-        
-        if self.bdinfo['type'] == BDInfoType.QUICK_SUMMARY:
-          # quick summary strip language
-          if '/' in title:
-            title = title.split('/', 1)[1].strip()
-        
-        # check audio commentary
-        is_commentary, commentary_reply = self._check_commentary(i)
+  
+    for i in range(0, min_audio_count):
+      title = self.bdinfo['audio'][i]
+      bdinfo_audio_parts = re.sub(r'\s+', ' ', title).split(' / ')
+      
+      # determine where to split based on bdinfo type
+      audio_split_index = 1 if self.bdinfo['type'] == BDInfoType.QUICK_SUMMARY else 0
+      
+      if self.bdinfo['type'] == BDInfoType.QUICK_SUMMARY:
+        # quick summary strip language
+        if '/' in title:
+          title = title.split('/', 1)[1].strip()
+      
+      # check audio commentary
+      is_commentary, commentary_reply = self._check_commentary(i)
 
-        if is_commentary:
-          reply += commentary_reply
-        elif len(bdinfo_audio_parts) >= 3:
-          if bdinfo_audio_parts[audio_split_index] == "DTS-HD Master Audio" and \
-            self._is_number(bdinfo_audio_parts[audio_split_index + 1]) and float(bdinfo_audio_parts[audio_split_index + 1]) < 3:
-            # DTS-HD MA 1.0 or 2.0 to FLAC
-            reply += self._check_audio_conversion(i, "DTS-HD Master Audio", "FLAC Audio")
-          elif bdinfo_audio_parts[audio_split_index] == "LPCM Audio":
-            if self._is_number(bdinfo_audio_parts[audio_split_index + 1]) and float(bdinfo_audio_parts[audio_split_index + 1]) < 3:
-              # LPCM 1.0 or 2.0 to FLAC
-              reply += self._check_audio_conversion(i, "LPCM Audio", "FLAC Audio")
-            else:
-              # LPCM > 2.0 to DTS-HD MA
-              reply += self._check_audio_conversion(i, "LPCM Audio", "DTS-HD Master Audio")
+      if is_commentary:
+        reply += commentary_reply
+      elif len(bdinfo_audio_parts) >= 3:
+        if bdinfo_audio_parts[audio_split_index] == "DTS-HD Master Audio" and \
+        self._is_number(bdinfo_audio_parts[audio_split_index + 1]) and float(bdinfo_audio_parts[audio_split_index + 1]) < 3:
+          # DTS-HD MA 1.0 or 2.0 to FLAC
+          reply += self._check_audio_conversion(i, "DTS-HD Master Audio", "FLAC Audio")
+        elif bdinfo_audio_parts[audio_split_index] == "LPCM Audio":
+          if self._is_number(bdinfo_audio_parts[audio_split_index + 1]) and float(bdinfo_audio_parts[audio_split_index + 1]) < 3:
+            # LPCM 1.0 or 2.0 to FLAC
+            reply += self._check_audio_conversion(i, "LPCM Audio", "FLAC Audio")
           else:
-            if 'title' in self.mediainfo['audio'][i]:
-              if title == self.mediainfo['audio'][i]['title']:
-                reply += self._print_report("correct", "Audio " + self._section_id("audio", i) + ": Track names match\n")
-              else:
-                is_bad_audio_format = False
-                if '/' in title and '/' in self.mediainfo['audio'][i]['title']:
-                  if self.codecs.is_codec(self.mediainfo['audio'][i]['title'][0]):
-                    mediainfo_audio_title = self.mediainfo['audio'][i]['title'].strip()
-                  else:
-                    # remove first part since its not a codec
-                    mediainfo_audio_title = ' / '.join(self.mediainfo['audio'][i]['title'].split(' / ')[1:]).strip()
-                  if title != mediainfo_audio_title:
-                    is_bad_audio_format = True
-                if is_bad_audio_format:
-                  reply += self._print_report("error", "Audio " + self._section_id("audio", i) + ": Bad conversion:\n```fix\nBDInfo: " + title + "\nMediaInfo: " + self.mediainfo['audio'][i]['title'] + "```")
-                else:
-                  reply += self._print_report("correct", "Audio " + self._section_id("audio", i) + ": Track names match\n")
+            # LPCM > 2.0 to DTS-HD MA
+            reply += self._check_audio_conversion(i, "LPCM Audio", "DTS-HD Master Audio")
+        else:
+          if 'title' in self.mediainfo['audio'][i]:
+            if title == self.mediainfo['audio'][i]['title']:
+              reply += self._print_report("correct", "Audio " + self._section_id("audio", i) + ": Track names match\n")
             else:
-              reply += self._print_report("error", "Audio " + self._section_id("audio", i) + ": Missing track name\n")
-    else:
-      reply += self._print_report("error", "Cannot verify audio track conversions, " +
-        str(len(self.bdinfo['audio'])) + " BDInfo Audio Track(s) vs " + str(len(self.mediainfo['audio'])) +
-        " MediaInfo Audio Track(s).\n")
+              is_bad_audio_format = False
+              if '/' in title and '/' in self.mediainfo['audio'][i]['title']:
+                if self.codecs.is_codec(self.mediainfo['audio'][i]['title'][0]):
+                  mediainfo_audio_title = self.mediainfo['audio'][i]['title'].strip()
+                else:
+                  # remove first part since its not a codec
+                  mediainfo_audio_title = ' / '.join(self.mediainfo['audio'][i]['title'].split(' / ')[1:]).strip()
+                if title != mediainfo_audio_title:
+                  is_bad_audio_format = True
+              if is_bad_audio_format:
+                reply += self._print_report("error", "Audio " + self._section_id("audio", i) + ": Bad conversion:\n```fix\nBDInfo: " + title + "\nMediaInfo: " + self.mediainfo['audio'][i]['title'] + "```")
+              else:
+                reply += self._print_report("correct", "Audio " + self._section_id("audio", i) + ": Track names match\n")
+          else:
+            reply += self._print_report("error", "Audio " + self._section_id("audio", i) + ": Missing track name\n")
+    
+    if len(self.mediainfo['audio']) > len(self.bdinfo['audio']):
+      reply += self._print_report("warning", "More mediainfo audio tracks ({}) than bdinfo audio tracks ({})\n".format(len(self.mediainfo['audio']), len(self.bdinfo['audio'])))
+    elif len(self.mediainfo['audio']) < len(self.bdinfo['audio']):
       if len(self.bdinfo['audio']) > len(self.mediainfo['audio']):
+        reply += self._print_report("warning", "More bdinfo audio tracks ({}) than mediainfo audio tracks ({}).\n".format(len(self.bdinfo['audio']), len(self.mediainfo['audio'])))
         reply += "Did you forget to add a minus (-) sign in front of unused audio tracks in bdinfo?\n"
         
     return reply
@@ -652,6 +660,25 @@ class Checker():
       
     return reply
     
+  def naive_people_extractor(self, document):
+    # nltk sometimes grabs two people together
+    # this naive approach tries to grab names after specific words
+    regex_words = ['actors', 'directors', 'cinematographers', 'editors', 'producers', 'writers']
+    
+    # (?i)(\bactors?|\bproducers?|\bwriters?)([^,\/]*)
+    regex_string = r'(?i)(\b' + '?|'.join(["\\b" + w for w in regex_words]) + ')([^,\/]*)'
+    
+    names = re.findall(regex_string, document)
+    # split by and
+    names = [n for name in names for n in name[1].split("and")]
+    # split by &
+    names = [n for name in names for n in name.split("&")]
+    # get the matched names
+    names = [name.strip() for name in names]
+    # remove empty names
+    names = list(filter(None, names))
+    return names
+    
   def check_people(self):
     reply = ""
     
@@ -661,8 +688,16 @@ class Checker():
         title = self.mediainfo['audio'][i]['title']
         # ignore codecs
         if not self.codecs.is_audio_title(title.split('/')[0].strip()):
-          matched_names = list()
-          names = extract_names(title)
+          names, matched_names = list(), list()
+          
+          # nltk extractor
+          #names = extract_names(title)
+          # naive extractor
+          naive_names = self.naive_people_extractor(title)
+          names.extend(naive_names)
+          # only one instance of each name
+          names = set(names)
+          
           search = tmdb.Search()
           for n in names:
             # TMDB API
@@ -673,7 +708,7 @@ class Checker():
             # IMDb API
             for person in ia.search_person(n):
               if n == person['name']:
-                matched_names.append(n)
+                matched_names.append(n)          
           matched_names = set(matched_names)
           if len(matched_names) > 0:
             reply += self._print_report("correct", "Audio " + self._section_id("audio", i) + " People Matched: `" + ", ".join(matched_names) + "`\n")
@@ -682,6 +717,8 @@ class Checker():
             reply += self._print_report("warning", "Audio " + self._section_id("audio", i) + " People Unmatched: `" + ", ".join(unmatched_names) + "`\n")
           
     return reply
+
+  
     
   def spell_check_track_name(self):
     reply = ""
